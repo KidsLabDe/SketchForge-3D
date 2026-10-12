@@ -2,6 +2,7 @@
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import { shellCadSolid } from "@/lib/cadShell";
 import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
 
 const HASH_UPPER_BOUND = 2_147_483_647;
@@ -437,15 +438,18 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
       return;
     }
     if (baseShape === null) throw new Error("Prepare an object before previewing the modifier");
-    const selected = request.edgeIds.map((id) => ({ edge: edgeHandles[id], owner: edgeOwners[id] })).filter((entry): entry is { edge: ShapeHandle; owner: number } => entry.edge !== undefined);
-    if (selected.length === 0) throw new Error("Select at least one highlighted edge");
+    const isShell = request.kind === "shell";
+    const selected = isShell ? [] : request.edgeIds.map((id) => ({ edge: edgeHandles[id], owner: edgeOwners[id] })).filter((entry): entry is { edge: ShapeHandle; owner: number } => entry.edge !== undefined);
+    if (!isShell && selected.length === 0) throw new Error("Select at least one highlighted edge");
     const componentResults: ShapeHandle[] = [];
     let result: ShapeHandle | null = null;
     try {
       for (let owner = 0; owner < baseSolids.length; owner += 1) {
         const solid = baseSolids[owner];
         const componentEdges = selected.filter((entry) => entry.owner === owner).map((entry) => entry.edge);
-        const component = componentEdges.length === 0
+        const component = isShell
+          ? shellCadSolid(activeCad, solid, request.amount, request.shellOpening ?? "top")
+          : componentEdges.length === 0
           ? activeCad.copy(solid)
           : request.kind === "fillet"
             ? activeCad.fillet(solid, componentEdges, request.amount)
@@ -455,8 +459,13 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
         componentResults.push(component);
       }
       result = componentResults.length === 1 ? componentResults[0] : activeCad.makeCompound(componentResults);
-      if (!cadShapeIsValid(activeCad, result)) throw new Error("The chosen size creates invalid or overlapping edge geometry");
-      const options = tessellationOptions(request.quality, request.amount);
+      if (!cadShapeIsValid(activeCad, result)) {
+        throw new Error(isShell
+          ? "This wall thickness creates invalid geometry. Use a thinner wall."
+          : "The chosen size creates invalid or overlapping edge geometry");
+      }
+      // A shell keeps the source curvature, so its wall thickness must not coarsen the mesh.
+      const options = tessellationOptions(request.quality, isShell ? 0.5 : request.amount);
       const mesh = copyCadMesh(activeCad.tessellate(result, options));
       const displayEdges = collectEdges(activeCad, result, 0).displayEdges;
       const brep = activeCad.toBREP(result);
@@ -504,7 +513,9 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
       });
       return;
     }
-    const message = request.type === "preview" && (rawMessage.includes("WebAssembly.Exception") || rawMessage.includes("fillet:") || rawMessage.includes("chamfer:"))
+    const message = request.type === "preview" && request.kind === "shell" && (rawMessage.includes("WebAssembly.Exception") || /shell:|offset:|cut:/.test(rawMessage))
+      ? "This body cannot be hollowed with this wall thickness. Use a thinner wall or another opening."
+      : request.type === "preview" && (rawMessage.includes("WebAssembly.Exception") || rawMessage.includes("fillet:") || rawMessage.includes("chamfer:"))
       ? `The selected edges cannot be ${request.kind === "fillet" ? "filleted" : "chamfered"} together at this size. Reduce the size or select fewer connected edges.`
       : rawMessage || "The CAD kernel could not complete this edge treatment";
     if (request.type === "prepare" && cad) releaseSession(cad);

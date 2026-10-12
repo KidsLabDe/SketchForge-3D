@@ -5,7 +5,7 @@ import { Check, LoaderCircle, Minus, Plus, RotateCcw, X } from "lucide-react";
 import { displayStepFromMillimeters, displayToMillimeters, formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, parseMeasurementInput } from "@/lib/measurementUnits";
 import type { CadModifierKind, CadModifierQuality } from "@/lib/cadModifierTypes";
 import { CAD_MODIFIER_MAX_SHARP_ANGLE, edgeModifierSelectionStatus } from "@/lib/cadModifierRuntime";
-import type { WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { ShellOpening, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 const MIN_EDGE_MODIFIER_AMOUNT = 0.001;
 const EDGE_MODIFIER_AMOUNT_STEP = 0.001;
@@ -135,6 +135,7 @@ export function EdgeModifierPanel({
   amount,
   maxAmount,
   chamferAngle,
+  shellOpening,
   quality,
   sharpAngle,
   workspace,
@@ -152,6 +153,7 @@ export function EdgeModifierPanel({
   error,
   onAmountChange,
   onChamferAngleChange,
+  onShellOpeningChange,
   onQualityChange,
   onSharpAngleChange,
   onTangentChainChange,
@@ -166,6 +168,7 @@ export function EdgeModifierPanel({
   amount: number;
   maxAmount: number;
   chamferAngle: number;
+  shellOpening: ShellOpening;
   quality: CadModifierQuality;
   sharpAngle: number;
   workspace: WorkplaneWorkspaceSettings;
@@ -183,6 +186,7 @@ export function EdgeModifierPanel({
   error: string | null;
   onAmountChange: (value: number) => void;
   onChamferAngleChange: (value: number) => void;
+  onShellOpeningChange: (value: ShellOpening) => void;
   onQualityChange: (value: CadModifierQuality) => void;
   onSharpAngleChange: (value: number) => void;
   onTangentChainChange: (value: boolean) => void;
@@ -194,7 +198,8 @@ export function EdgeModifierPanel({
   onCancel: () => void;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
-  const title = kind === "fillet" ? "Fillet edges" : "Chamfer edges";
+  const isShell = kind === "shell";
+  const title = isShell ? "Hollow" : kind === "fillet" ? "Fillet edges" : "Chamfer edges";
   const amountMin = Math.min(MIN_EDGE_MODIFIER_AMOUNT, Math.max(Number.EPSILON, maxAmount));
   const amountMax = Math.max(amountMin, maxAmount);
   return (
@@ -202,9 +207,9 @@ export function EdgeModifierPanel({
       <div className="edge-modifier-header">
         <div>
           <strong>{title}</strong>
-          <span>{edgeModifierSelectionStatus(prepared, selectedCount, availableCount)}</span>
+          <span>{isShell ? (prepared ? "Constant inward wall" : "Preparing CAD body") : edgeModifierSelectionStatus(prepared, selectedCount, availableCount)}</span>
         </div>
-        <button type="button" aria-label={`Cancel ${kind}`} onClick={onCancel}><X size={20} /></button>
+        <button type="button" aria-label={`Cancel ${isShell ? "hollow" : kind}`} onClick={onCancel}><X size={20} /></button>
       </div>
 
       <div className={`edge-modifier-target ${groupedCount > 0 ? "grouped" : ""}`}>
@@ -213,13 +218,19 @@ export function EdgeModifierPanel({
       </div>
 
       <div className="edge-modifier-selection-help">
-        {prepared ? "Click highlighted model edges to toggle them. Hold Shift to add or remove a single edge." : "Loading CAD edge data from the local browser worker."}
+        {!prepared
+          ? "Loading CAD data from the local browser worker."
+          : isShell
+            ? "Removes material inside the body and keeps a wall of the chosen thickness. The outer size does not change."
+            : "Click highlighted model edges to toggle them. Hold Shift to add or remove a single edge."}
       </div>
 
-      <div className="edge-modifier-quick-actions">
-        <button type="button" disabled={!prepared || busy} onClick={onSelectAll}>All sharp edges</button>
-        <button type="button" disabled={!prepared || busy} onClick={onClear}>Clear</button>
-      </div>
+      {isShell ? null : (
+        <div className="edge-modifier-quick-actions">
+          <button type="button" disabled={!prepared || busy} onClick={onSelectAll}>All sharp edges</button>
+          <button type="button" disabled={!prepared || busy} onClick={onClear}>Clear</button>
+        </div>
+      )}
 
       {appliedFeatureCount > 0 ? (
         <div className="edge-modifier-history-actions">
@@ -254,7 +265,7 @@ export function EdgeModifierPanel({
       ) : null}
 
       <EdgeModifierSlider
-        label={kind === "fillet" ? "Radius" : "Distance"}
+        label={isShell ? "Wall thickness" : kind === "fillet" ? "Radius" : "Distance"}
         value={amount}
         min={amountMin}
         max={amountMax}
@@ -267,16 +278,29 @@ export function EdgeModifierPanel({
 
       {kind === "chamfer" ? <EdgeModifierSlider label="Angle" value={chamferAngle} min={5} max={85} step={1} unit="deg" workspace={workspace} disabled={!prepared || busy} onChange={onChamferAngleChange} /> : null}
 
-      <EdgeModifierSlider label="Sharp-edge threshold" value={sharpAngle} min={1} max={CAD_MODIFIER_MAX_SHARP_ANGLE} step={1} unit="deg" workspace={workspace} disabled={!prepared || busy} onChange={onSharpAngleChange} />
+      {isShell ? (
+        <label className="edge-modifier-field">
+          <span>Opening</span>
+          <select value={shellOpening} disabled={!prepared || busy} onChange={(event) => onShellOpeningChange(event.currentTarget.value as ShellOpening)}>
+            <option value="top">Open top</option>
+            <option value="bottom">Open bottom</option>
+            <option value="closed">Closed (inner cavity)</option>
+          </select>
+        </label>
+      ) : (
+        <>
+          <EdgeModifierSlider label="Sharp-edge threshold" value={sharpAngle} min={1} max={CAD_MODIFIER_MAX_SHARP_ANGLE} step={1} unit="deg" workspace={workspace} disabled={!prepared || busy} onChange={onSharpAngleChange} />
 
-      <label className="edge-modifier-check">
-        <input type="checkbox" checked={tangentChain} disabled={!prepared || busy} onChange={(event) => onTangentChainChange(event.currentTarget.checked)} />
-        <span>Select tangent chains</span>
-      </label>
+          <label className="edge-modifier-check">
+            <input type="checkbox" checked={tangentChain} disabled={!prepared || busy} onChange={(event) => onTangentChainChange(event.currentTarget.checked)} />
+            <span>Select tangent chains</span>
+          </label>
+        </>
+      )}
 
       <label className="edge-modifier-check">
         <input type="checkbox" checked={preserveEdgeSize} disabled={!prepared || busy} onChange={(event) => onPreserveEdgeSizeChange(event.currentTarget.checked)} />
-        <span>Keep edge size when resizing</span>
+        <span>{isShell ? "Keep wall thickness when resizing" : "Keep edge size when resizing"}</span>
       </label>
 
       <label className="edge-modifier-field">
@@ -291,7 +315,7 @@ export function EdgeModifierPanel({
       {error ? <div className="edge-modifier-error" role="alert">{error}</div> : null}
       <div className="edge-modifier-footer">
         <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
-        <button type="button" className="primary" disabled={!prepared || busy || selectedCount === 0 || Boolean(error)} onClick={onApply}>
+        <button type="button" className="primary" disabled={!prepared || busy || (!isShell && selectedCount === 0) || Boolean(error)} onClick={onApply}>
           {busy ? <LoaderCircle className="edge-modifier-spinner" size={17} /> : <Check size={17} />}
           Apply
         </button>

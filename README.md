@@ -41,6 +41,7 @@ No login. No server project storage. No heavyweight CAD install just to make a u
 - **Solid and hole workflow** - turn shapes into cutters and group them into final geometry.
 - **Boolean Intersection** - keep only the geometry where selected solid and hole shapes overlap.
 - **Reversible edge tools** - chamfer and fillet selected CAD edges, with history controls for removing applied edge features.
+- **Hollow** - shell a solid or group with a constant wall thickness, open at the top or bottom or closed around an inner cavity.
 - **Rotated solid edge treatment** - chamfer and fillet preserve analytic box topology after one-, two-, or three-axis rotations.
 - **STL import** - bring outside models into the same workspace as primitives.
 - **STL, OBJ, and STEP workflows** - export selected objects or the whole scene, and round-trip exact STEP/B-Rep geometry.

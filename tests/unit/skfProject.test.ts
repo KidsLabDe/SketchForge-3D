@@ -317,6 +317,39 @@ describe("SketchForge .skf project packages", () => {
     expect(restored.shapes[0].edgeTreatmentHistory?.[0].before.kind).toBe("box");
   });
 
+  it("round-trips shell features with their opening and reversible history", async () => {
+    const shell = { kind: "shell" as const, amount: 2, edgeCount: 0, shellOpening: "top" as const };
+    const hollowed = shape("mesh", "hollowed", {
+      importedMesh: {
+        positions: [0, 0, 0, 2, 0, 0, 0, 2, 0],
+        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+        baseWidth: 2,
+        baseDepth: 1,
+        baseHeight: 2,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+      cadBrep: "BREP shell payload",
+      edgeResizeMode: "preserve",
+      edgeTreatments: [shell],
+      edgeTreatmentHistory: [{
+        id: "shell-history-1",
+        createdAt: 1_700_000_060_000,
+        feature: shell,
+        before: shape("box", "hollowed"),
+      }],
+    });
+    const exported = await exportSkfProject(input([hollowed]));
+    const { document } = packageDocument(exported);
+    const feature = document.features.find((candidate) => candidate.type === "shell");
+    expect(feature?.parameters).toMatchObject({ amount: 2, shellOpening: "top" });
+
+    const restored = await importSkfProject(exported);
+    expect(restored.shapes[0].edgeTreatments).toEqual([shell]);
+    expect(restored.shapes[0].edgeTreatmentHistory?.[0].feature).toEqual(shell);
+    expect(restored.shapes[0].edgeTreatmentHistory?.[0].before.kind).toBe("box");
+  });
+
   it("repairs duplicate descendant IDs from legacy shallow-copied groups during export", async () => {
     const roof = shape("roundRoof", "round-roof-shared-child");
     const box = shape("box", "box-shared-child");

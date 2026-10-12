@@ -33,7 +33,7 @@ const SHAPE_KINDS = new Set([
 ]);
 
 const FEATURE_TYPES = new Set([
-  "group", "boolean-subtraction", "boolean-intersection", "mirror", "sketch-extrusion", "sketch-revolve", "fillet", "chamfer",
+  "group", "boolean-subtraction", "boolean-intersection", "mirror", "sketch-extrusion", "sketch-revolve", "fillet", "chamfer", "shell",
 ]);
 
 type SkfAssetKind = "source" | "derived-mesh" | "brep" | "image" | "display-edges";
@@ -723,7 +723,7 @@ function activeProjectIndexes(state: SkfStateV1) {
     }
     const treatments = Array.isArray(node.definition.edgeTreatments) ? node.definition.edgeTreatments as Array<Record<string, unknown>> : [];
     treatments.forEach((treatment, index) => {
-      const type = treatment.kind === "fillet" ? "fillet" : "chamfer";
+      const type = treatment.kind === "fillet" || treatment.kind === "shell" ? treatment.kind : "chamfer";
       const featureId = `feature/${safeNodeToken(node.nodeId)}/${type}/${index}`;
       features.push({
         id: featureId,

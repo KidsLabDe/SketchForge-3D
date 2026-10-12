@@ -156,6 +156,10 @@ export function ToolbarFilletIcon() {
   return <ToolbarCommandImage file="toolbar-fillet.png" className="toolbar-user-art-icon" />;
 }
 
+export function ToolbarHollowIcon() {
+  return <img aria-hidden="true" className="toolbar-command-icon toolbar-art-toolbar-shell toolbar-user-art-icon" src="/assets/sketchforge/toolbar-shell.svg" alt="" draggable={false} />;
+}
+
 export function ToolbarPreserveEdgeIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 48 48" aria-hidden="true" {...props}>

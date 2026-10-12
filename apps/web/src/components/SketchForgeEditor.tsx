@@ -36,6 +36,7 @@ import {
   ToolbarImportIcon,
   ToolbarIntersectionIcon,
   ToolbarFilletIcon,
+  ToolbarHollowIcon,
   ToolbarMirrorIcon,
   ToolbarPasteIcon,
   ToolbarRedoIcon,
@@ -73,6 +74,8 @@ import {
 } from "@/lib/workplaneShapes";
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
 import { hasOneToOneCadComponentMapping } from "@/lib/cadModifierGroups";
+import { maxShellThickness } from "@/lib/cadShell";
+import { mergeEnclosedCavityComponents } from "@/lib/meshCavities";
 import {
   CAD_MODIFIER_MAX_SHARP_ANGLE,
   CAD_MODIFIER_REQUEST_TIMEOUT_MS,
@@ -128,7 +131,7 @@ import {
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
 import type { SketchCadBuildResponse } from "@/lib/sketchCadTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, ShellOpening, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromObj, importedShapeFromStl, importedShapeFromSvg };
 
@@ -151,6 +154,7 @@ type EdgeModifierSession = {
   amount: number;
   sharpAngle: number;
   chamferAngle: number;
+  shellOpening: ShellOpening;
   quality: CadModifierQuality;
   tangentChain: boolean;
   preserveEdgeSize: boolean;
@@ -1544,8 +1548,21 @@ function cadModifierComponentPreviews(sourceParts: WorkplaneShape[], components:
   return previews;
 }
 
+const SHELL_OPENING_LABELS: Record<ShellOpening, string> = {
+  top: "open top",
+  bottom: "open bottom",
+  closed: "closed",
+};
+
+const CAD_MODIFIER_VERBS: Record<CadModifierKind, string> = {
+  chamfer: "chamfer",
+  fillet: "fillet",
+  shell: "hollow",
+};
+
 function edgeTreatmentLabel(feature: NonNullable<WorkplaneShape["edgeTreatments"]>[number]) {
   const size = `${Number(feature.amount.toFixed(2))} mm`;
+  if (feature.kind === "shell") return `hollow (${size} wall, ${SHELL_OPENING_LABELS[feature.shellOpening ?? "top"]})`;
   return `${feature.kind === "fillet" ? "fillet" : "chamfer"} (${size}, ${feature.edgeCount} edge${feature.edgeCount === 1 ? "" : "s"})`;
 }
 
@@ -1636,6 +1653,9 @@ function groupedShapeWithComponentEdgeTreatment(
 ) {
   if (
     !base.groupedShapes?.length ||
+    // A shell hollows the fused body as a whole, so it cannot be split back
+    // onto the individual group children.
+    feature.kind === "shell" ||
     // A tapered group is sent to CAD as one baked final mesh because the parent
     // deformation cannot be represented by its untapered child primitives.
     // Keep the treated result flattened instead of rebuilding a nested group
@@ -3222,9 +3242,14 @@ function meshComponentShape(source: WorkplaneShape, mesh: MeshData, faceIndices:
   });
 }
 
+function separableMeshComponents(mesh: MeshData) {
+  const components = meshFaceComponents(mesh).filter((component) => component.length > 0);
+  return mergeEnclosedCavityComponents(mesh.vertices, mesh.faces, components);
+}
+
 function separateMeshParts(shape: WorkplaneShape) {
   const mesh = meshForShape(shape);
-  const components = meshFaceComponents(mesh).filter((component) => component.length > 0);
+  const components = separableMeshComponents(mesh);
   if (components.length <= 1) return [];
   return components
     .map((component, index) => meshComponentShape(shape, mesh, component, index, components.length))
@@ -3241,7 +3266,7 @@ function separablePartCount(shape: WorkplaneShape) {
   if (shape.locked || shape.hole) return 0;
   if (shape.groupedShapes?.length && !shape.importedMesh) return shape.groupedShapes.length;
   const mesh = meshForShape(shape);
-  return meshFaceComponents(mesh).length;
+  return separableMeshComponents(mesh).length;
 }
 
 function separateShapeParts(shape: WorkplaneShape) {
@@ -5256,7 +5281,7 @@ function compactShapeSummary(shape: WorkplaneShape, index: number) {
     `${index}:${shape.kind}${shape.hole ? "H" : "S"}${shape.importedMesh ? "I" : ""}${shape.imagePlate ? "P" : ""}`,
     `g${shape.groupedShapes?.length ?? 0}`,
     `tri${shape.importedMesh?.triangleCount ?? 0}`,
-    `edge${shape.edgeTreatments?.map((feature) => `${feature.kind}:${feature.amount}:${feature.edgeCount}:${feature.chamferAngle ?? ""}`).join("|") ?? ""}`,
+    `edge${shape.edgeTreatments?.map((feature) => `${feature.kind}:${feature.amount}:${feature.edgeCount}:${feature.chamferAngle ?? ""}:${feature.shellOpening ?? ""}`).join("|") ?? ""}`,
     `viewEdges${shape.cadDisplayEdges?.length ?? "auto"}v${shape.cadDisplayEdgesVersion ?? 0}`,
     `edgeResize${shape.edgeResizeMode ?? "scale"}`,
     `brep${shape.cadBrep?.length ?? 0}`,
@@ -5652,6 +5677,7 @@ export function SketchForgeEditor({
       }
       if (message.type === "ready") {
         if (message.requestId !== cadModifierPrepareRef.current) return;
+        const shell = edgeModifierRef.current?.kind === "shell";
         setEdgeModifier((current) => current ? {
           ...current,
           edges: message.edges,
@@ -5660,9 +5686,10 @@ export function SketchForgeEditor({
           prepared: true,
           preview: null,
           componentPreviews: [],
-          error: message.selectableEdgeIds.length ? null : "No sharp manifold edges were found at this threshold",
+          error: shell || message.selectableEdgeIds.length ? null : "No sharp manifold edges were found at this threshold",
         } : current);
-        if (message.selectableEdgeIds.length) setNotice("Select highlighted edges, then adjust the preview");
+        if (shell) setNotice("Adjust the wall thickness and opening");
+        else if (message.selectableEdgeIds.length) setNotice("Select highlighted edges, then adjust the preview");
         return;
       }
       if (message.type === "preview") {
@@ -5683,7 +5710,7 @@ export function SketchForgeEditor({
           busy: false,
           error: preview ? null : "The CAD kernel returned an empty edge treatment",
         } : current);
-        if (preview) setNotice("Edge treatment preview ready");
+        if (preview) setNotice(edgeModifierRef.current?.kind === "shell" ? "Hollow preview ready" : "Edge treatment preview ready");
         return;
       }
       if (message.type === "error") {
@@ -5895,6 +5922,9 @@ export function SketchForgeEditor({
   const edgeModifierMaxAmount = useMemo(() => {
     const source = cadModifierBaseShapeRef.current ?? selectedShape;
     if (!source) return 10;
+    if (edgeModifier?.kind === "shell") {
+      return Math.max(MIN_EDGE_MODIFIER_AMOUNT, maxShellThickness(shapeWidth(source), shapeDepth(source), source.height, edgeModifier.shellOpening) * 0.98);
+    }
     const smallestDimension = Math.min(shapeWidth(source), shapeDepth(source), source.height);
     return Math.max(MIN_EDGE_MODIFIER_AMOUNT, smallestDimension * 0.99);
   }, [edgeModifier, selectedShape]);
@@ -5907,7 +5937,7 @@ export function SketchForgeEditor({
   );
   const toggleModifierEdge = useCallback((id: number, singleEdge = false) => {
     setEdgeModifier((current) => {
-      if (!current || current.busy) return current;
+      if (!current || current.busy || current.kind === "shell") return current;
       const allowed = new Set(current.edges.filter((edge) => selectableCadModifierEdge(edge, current.sharpAngle)).map((edge) => edge.id));
       if (!allowed.has(id)) return current;
       const ids = current.tangentChain && !singleEdge ? tangentCadEdgeChain(current.edges, id, allowed) : [id];
@@ -7403,7 +7433,7 @@ export function SketchForgeEditor({
 
   const startEdgeModifier = useCallback((kind: CadModifierKind) => {
     if (selectedShapes.length !== 1 || !selectedShape || selectedShape.locked || selectedShape.hole) {
-      setNotice(`Select one unlocked solid to ${kind}`);
+      setNotice(`Select one unlocked solid to ${CAD_MODIFIER_VERBS[kind]}`);
       return;
     }
     invalidateCadModifierSession();
@@ -7435,7 +7465,9 @@ export function SketchForgeEditor({
       setNotice("This mesh is too dense for interactive edge treatment. Simplify it below 180,000 triangles first.");
       return;
     }
-    const amount = Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(1, shapeWidth(selectedShape) / 6, shapeDepth(selectedShape) / 6, selectedShape.height / 6));
+    const amount = kind === "shell"
+      ? Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(2, maxShellThickness(shapeWidth(selectedShape), shapeDepth(selectedShape), selectedShape.height, "top") / 2))
+      : Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(1, shapeWidth(selectedShape) / 6, shapeDepth(selectedShape) / 6, selectedShape.height / 6));
     cadModifierBaseShapeRef.current = selectedShape;
     cadModifierBaseFingerprintRef.current = projectShapesFingerprint([selectedShape]);
     cadModifierSourcePartsRef.current = sourceParts;
@@ -7448,16 +7480,18 @@ export function SketchForgeEditor({
       amount,
       sharpAngle: 25,
       chamferAngle: 45,
+      shellOpening: "top",
       quality: "standard",
       tangentChain: defaultCadModifierTangentChain(appliedEdgeTreatmentCount),
-      preserveEdgeSize: selectedShape.edgeResizeMode === "preserve",
+      // A wall should stay at its thickness when the hollowed body is resized.
+      preserveEdgeSize: kind === "shell" && !selectedShape.edgeTreatments?.length ? true : selectedShape.edgeResizeMode === "preserve",
       busy: true,
       prepared: false,
       error: null,
       preview: null,
       componentPreviews: [],
     });
-    setNotice(`Preparing ${kind} edges in the CAD worker`);
+    setNotice(kind === "shell" ? "Preparing the hollow in the CAD worker" : `Preparing ${kind} edges in the CAD worker`);
     const parts: CadModifierMeshPart[] = partInputs.map((part) => {
       if (part.brep) return { brep: part.brep, brepTransform: part.brepTransform, hole: Boolean(part.shape.hole) };
       if (part.primitive) return { primitive: part.primitive, hole: Boolean(part.shape.hole) };
@@ -7584,6 +7618,7 @@ export function SketchForgeEditor({
       amount,
       sharpAngle,
       chamferAngle,
+      shellOpening: "top",
       quality,
       tangentChain: false,
       preserveEdgeSize,
@@ -7637,12 +7672,13 @@ export function SketchForgeEditor({
       setNotice("Wait for a valid edge preview before applying");
       return;
     }
-    const label = edgeModifier.kind === "fillet" ? "Filleted" : "Chamfered";
+    const isShell = edgeModifier.kind === "shell";
     const feature = {
       kind: edgeModifier.kind,
       amount: edgeModifier.amount,
-      edgeCount: edgeModifier.selectedEdgeIds.length,
+      edgeCount: isShell ? 0 : edgeModifier.selectedEdgeIds.length,
       ...(edgeModifier.kind === "chamfer" ? { chamferAngle: edgeModifier.chamferAngle } : {}),
+      ...(isShell ? { shellOpening: edgeModifier.shellOpening } : {}),
     } satisfies NonNullable<WorkplaneShape["edgeTreatments"]>[number];
     const createdAt = Date.now();
     const previewShape = canonicalizeShape({
@@ -7667,10 +7703,13 @@ export function SketchForgeEditor({
       edgeModifier.preserveEdgeSize,
       createdAt,
     );
+    const edgeCount = edgeModifier.selectedEdgeIds.length;
     commitShapes(
       shapes.map((shape) => shape.id === base.id ? modifiedShape : shape),
       base.id,
-      `${label} ${edgeModifier.selectedEdgeIds.length} edge${edgeModifier.selectedEdgeIds.length === 1 ? "" : "s"}`,
+      isShell
+        ? `Hollowed ${base.name} (${Number(feature.amount.toFixed(2))} mm wall, ${SHELL_OPENING_LABELS[edgeModifier.shellOpening]})`
+        : `${edgeModifier.kind === "fillet" ? "Filleted" : "Chamfered"} ${edgeCount} edge${edgeCount === 1 ? "" : "s"}`,
     );
     invalidateCadModifierSession();
   }, [commitShapes, edgeModifier, invalidateCadModifierSession, shapes]);
@@ -7681,7 +7720,7 @@ export function SketchForgeEditor({
       if (event.key === "Escape") {
         event.preventDefault();
         cancelEdgeModifier();
-      } else if (event.key === "Enter" && edgeModifier.preview && edgeModifier.selectedEdgeIds.length > 0 && !edgeModifier.busy && !edgeModifier.error) {
+      } else if (event.key === "Enter" && edgeModifier.preview && (edgeModifier.kind === "shell" || edgeModifier.selectedEdgeIds.length > 0) && !edgeModifier.busy && !edgeModifier.error) {
         const target = event.target instanceof HTMLElement ? event.target : null;
         if (target?.closest("input, select, textarea, button, [contenteditable='true']")) return;
         event.preventDefault();
@@ -7693,15 +7732,16 @@ export function SketchForgeEditor({
   }, [applyEdgeModifier, cancelEdgeModifier, edgeModifier]);
 
   useEffect(() => {
-    if (!edgeModifier?.prepared || edgeModifier.selectedEdgeIds.length === 0) return;
+    if (!edgeModifier?.prepared || (edgeModifier.kind !== "shell" && edgeModifier.selectedEdgeIds.length === 0)) return;
     const timer = window.setTimeout(() => {
       const requestId = postCadModifierRequest({
         type: "preview",
         kind: edgeModifier.kind,
-        edgeIds: edgeModifier.selectedEdgeIds,
+        edgeIds: edgeModifier.kind === "shell" ? [] : edgeModifier.selectedEdgeIds,
         amount: edgeModifier.amount,
         quality: edgeModifier.quality,
         chamferAngle: edgeModifier.chamferAngle,
+        shellOpening: edgeModifier.shellOpening,
       });
       if (requestId === null) {
         const message = cadModifierWorkerFailureMessage();
@@ -7714,7 +7754,7 @@ export function SketchForgeEditor({
       setEdgeModifier((current) => current ? { ...current, busy: true, error: null } : current);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [armCadModifierWatchdog, edgeModifier?.amount, edgeModifier?.chamferAngle, edgeModifier?.kind, edgeModifier?.prepared, edgeModifier?.quality, edgeModifier?.selectedEdgeIds, postCadModifierRequest]);
+  }, [armCadModifierWatchdog, edgeModifier?.amount, edgeModifier?.chamferAngle, edgeModifier?.kind, edgeModifier?.prepared, edgeModifier?.quality, edgeModifier?.selectedEdgeIds, edgeModifier?.shellOpening, postCadModifierRequest]);
 
   const snapSelected = useCallback(() => {
     if (!hasSelection) {
@@ -9164,6 +9204,7 @@ export function SketchForgeEditor({
         onGroup={groupSelected}
         onIntersect={intersectSelected}
         onFillet={() => edgeModifier?.kind === "fillet" ? cancelEdgeModifier() : startEdgeModifier("fillet")}
+        onHollow={() => edgeModifier?.kind === "shell" ? cancelEdgeModifier() : startEdgeModifier("shell")}
         onMirror={toggleMirrorMode}
         onPaste={pasteShape}
         onRedo={redo}
@@ -9262,7 +9303,7 @@ export function SketchForgeEditor({
           onWorkplaneModeChange={closeViewportWorkplaneMode}
           modifierActive={Boolean(edgeModifier)}
           modifierPreviewActive={Boolean(edgeModifier?.preview)}
-          modifierEdges={edgeModifier?.edges.filter((edge) => modifierAvailableEdgeIds.includes(edge.id)) ?? []}
+          modifierEdges={edgeModifier && edgeModifier.kind !== "shell" ? edgeModifier.edges.filter((edge) => modifierAvailableEdgeIds.includes(edge.id)) : []}
           selectedModifierEdgeIds={edgeModifier?.selectedEdgeIds ?? []}
           onModifierEdgeToggle={toggleModifierEdge}
           challengeTutorial={challengeTutorial}
@@ -9279,6 +9320,7 @@ export function SketchForgeEditor({
           amount={edgeModifier.amount}
           maxAmount={edgeModifierMaxAmount}
           chamferAngle={edgeModifier.chamferAngle}
+          shellOpening={edgeModifier.shellOpening}
           quality={edgeModifier.quality}
           sharpAngle={edgeModifier.sharpAngle}
           workspace={workspaceSettings}
@@ -9296,6 +9338,14 @@ export function SketchForgeEditor({
           error={edgeModifier.error}
           onAmountChange={(value) => setEdgeModifier((current) => current?.prepared ? { ...current, amount: Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(edgeModifierMaxAmount, value)), preview: null, busy: true, error: null } : current)}
           onChamferAngleChange={(value) => setEdgeModifier((current) => current?.prepared ? { ...current, chamferAngle: Math.max(5, Math.min(85, value)), preview: null, busy: true, error: null } : current)}
+          onShellOpeningChange={(shellOpening) => setEdgeModifier((current) => {
+            if (!current?.prepared) return current;
+            const source = cadModifierBaseShapeRef.current;
+            const maxAmount = source
+              ? Math.max(MIN_EDGE_MODIFIER_AMOUNT, maxShellThickness(shapeWidth(source), shapeDepth(source), source.height, shellOpening) * 0.98)
+              : current.amount;
+            return { ...current, shellOpening, amount: Math.min(current.amount, maxAmount), preview: null, busy: true, error: null };
+          })}
           onQualityChange={(quality) => setEdgeModifier((current) => current?.prepared ? { ...current, quality, preview: null, busy: true, error: null } : current)}
           onSharpAngleChange={(sharpAngle) => setEdgeModifier((current) => {
             if (!current?.prepared) return current;
@@ -9469,6 +9519,7 @@ function SecondaryToolbar({
   onGroup,
   onIntersect,
   onFillet,
+  onHollow,
   onMirror,
   onPaste,
   onRedo,
@@ -9524,6 +9575,7 @@ function SecondaryToolbar({
   onGroup: () => void;
   onIntersect: () => void;
   onFillet: () => void;
+  onHollow: () => void;
   onMirror: () => void;
   onPaste: () => void;
   onRedo: () => void;
@@ -9698,6 +9750,7 @@ function SecondaryToolbar({
     { label: "Snap to grid", icon: ToolbarSnapGridIcon, action: onSnap, enabled: hasSelection },
     { label: "Chamfer", icon: ToolbarChamferIcon, action: onChamfer, enabled: canEdgeModify, active: edgeModifierKind === "chamfer" },
     { label: "Fillet", icon: ToolbarFilletIcon, action: onFillet, enabled: canEdgeModify, active: edgeModifierKind === "fillet" },
+    { label: "Hollow", icon: ToolbarHollowIcon, action: onHollow, enabled: canEdgeModify, active: edgeModifierKind === "shell" },
   ];
   const arrangeTools = [
     { label: "Drop to workplane", icon: ToolbarDropToWorkplaneIcon, action: onDropToWorkplane, enabled: hasSelection },

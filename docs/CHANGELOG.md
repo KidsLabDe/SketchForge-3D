@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added **Hollow** next to Chamfer and Fillet: hollows a solid or group with a constant inward wall thickness, either open at the top, open at the bottom, or closed around an inner cavity. The outer size stays the same, and the feature is reversible through the edge feature history. `.skf` files that contain a hollow use the new `shell` feature type and cannot be opened by older SketchForge versions.
+- Separate Parts no longer splits the inner skin of a fully enclosed cavity off as its own part.
 - Arrow-key holds (including Ctrl/Cmd+arrow elevation changes) now finish as one undo step and one save on release. Separate taps remain separate undo steps.
 - Reduced autosave work after transforms by sharing CAD display edges across undo states and reusing immutable mesh, B-Rep, and image encoding.
 - Added `.skf` format 2 shared display-edge assets, with continued reading of format 1 packages and legacy JSON projects. New saves require the updated reader.

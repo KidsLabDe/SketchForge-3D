@@ -147,11 +147,16 @@ export type SketchRevolveSettings = {
   quality: number;
 };
 
+export type ShellOpening = "top" | "bottom" | "closed";
+
 export type EdgeTreatmentFeature = {
-  kind: "fillet" | "chamfer";
+  kind: "fillet" | "chamfer" | "shell";
+  /** Fillet radius, chamfer distance, or shell wall thickness in millimetres. */
   amount: number;
+  /** Treated edge count; 0 for shell features. */
   edgeCount: number;
   chamferAngle?: number;
+  shellOpening?: ShellOpening;
 };
 
 export type EdgeTreatmentHistoryEntry = {

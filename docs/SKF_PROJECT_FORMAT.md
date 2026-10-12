@@ -29,13 +29,13 @@ project.skf
 - `states`: explicit root node IDs and editable object graphs for the active scene and undo/redo states
 - `history`: ordered state references, selection per state, and current undo/redo index
 - `sketches`: sketch/extrusion indexes
-- `features`: supported group, subtraction, intersection, mirror, sketch-extrusion, fillet, and chamfer operations used by the active project
+- `features`: supported group, subtraction, intersection, mirror, sketch-extrusion, fillet, chamfer, and shell (hollow) operations used by the active project
 - `groups`: explicit parent/member references and operation type
 - `workplanes`: base and selected offset workplanes
 - `exactCad`: objects with exact B-Rep or imported STEP sources
 - `editor`: workspace dimensions, units, snap grid, and selected workplane elevation
 
-Object nodes keep stable SketchForge object IDs. Groups refer to child node IDs instead of array positions. Fillet/chamfer history refers to explicit “before” nodes. Feature dependencies are explicit and checked for cycles.
+Object nodes keep stable SketchForge object IDs. Groups refer to child node IDs instead of array positions. Fillet/chamfer/shell history refers to explicit “before” nodes. A shell feature stores its wall thickness in `amount` and its opening (`top`, `bottom`, or `closed`) in `shellOpening`. Feature dependencies are explicit and checked for cycles.
 
 Nodes reference display edges through `cadDisplayEdgesAssetId`; the edge version remains in the shape definition. Each distinct edge array is stored once, including references from groups and reversible edge-treatment history. Mesh coordinate arrays, B-Rep strings, and image data URLs are encoded and hashed once per immutable resource. Weak caches and a bounded text cache reuse this work on subsequent saves. Import restores shared mesh and edge objects across undo states. Long node traversals yield to the event loop between batches.
 

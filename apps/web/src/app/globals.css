@@ -2421,7 +2421,8 @@ button {
 }
 
 .toolbar-icon .toolbar-art-toolbar-chamfer,
-.toolbar-icon .toolbar-art-toolbar-fillet {
+.toolbar-icon .toolbar-art-toolbar-fillet,
+.toolbar-icon .toolbar-art-toolbar-shell {
   width: 34px;
   height: 34px;
 }

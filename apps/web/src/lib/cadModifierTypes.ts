@@ -1,4 +1,6 @@
-export type CadModifierKind = "chamfer" | "fillet";
+import type { ShellOpening } from "@/types/sketchforge";
+
+export type CadModifierKind = "chamfer" | "fillet" | "shell";
 
 export type CadModifierEdge = {
   id: number;
@@ -54,6 +56,7 @@ export type CadModifierWorkerRequest =
       amount: number;
       quality: CadModifierQuality;
       chamferAngle: number;
+      shellOpening?: ShellOpening;
     }
   | { type: "dispose"; requestId: number };
 
