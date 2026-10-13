@@ -47,7 +47,7 @@ export type CadModifierComponentMesh = {
 };
 
 export type CadModifierWorkerRequest =
-  | { type: "prepare"; requestId: number; parts: CadModifierMeshPart[]; sharpAngle: number; suppressTreatmentDetailEdges?: boolean }
+  | { type: "prepare"; requestId: number; parts: CadModifierMeshPart[]; sharpAngle: number; suppressTreatmentDetailEdges?: boolean; detectShellOpenings?: boolean }
   | {
       type: "preview";
       requestId: number;
@@ -61,7 +61,7 @@ export type CadModifierWorkerRequest =
   | { type: "dispose"; requestId: number };
 
 export type CadModifierWorkerResponse =
-  | { type: "ready"; requestId: number; edges: CadModifierEdge[]; selectableEdgeIds: number[]; sourceType: string }
+  | { type: "ready"; requestId: number; edges: CadModifierEdge[]; selectableEdgeIds: number[]; sourceType: string; shellOpenings?: ShellOpening[] }
   | {
       type: "preview";
       requestId: number;

@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { OcctKernel } from "occt-wasm";
-import { maxShellThickness, shellCadSolid, shellOpenFaces } from "@/lib/cadShell";
+import { availableShellOpenings, maxShellThickness, shellCadSolid, shellOpenFaces } from "@/lib/cadShell";
 
 let cad: OcctKernel;
 
@@ -61,7 +61,81 @@ describe("shellCadSolid", () => {
   it("rejects an opening on a side without a flat face", () => {
     const sphere = cad.makeSphere(10);
     expect(shellOpenFaces(cad, sphere, "top")).toHaveLength(0);
+    expect(availableShellOpenings(cad, [sphere])).toEqual(["closed"]);
     expect(() => shellCadSolid(cad, sphere, 2, "top")).toThrow(/no flat top face/);
+  });
+});
+
+// Same triangle layout as SketchForge's half-sphere mesh, sewn into a solid the
+// way the CAD modifier worker reconstructs tessellated primitives. The editor
+// transfers meshes as Float32Array; `float32` reproduces that rounding.
+function facetedHalfSphere(steps: number, radius: number, height: number, float32 = false) {
+  const lon = steps * 2;
+  const lat = Math.round(steps / 2);
+  const point = (latIndex: number, lonIndex: number) => {
+    const theta = (latIndex / lat) * (Math.PI / 2);
+    const phi = ((lonIndex % lon) / lon) * Math.PI * 2;
+    const coordinates = [Math.cos(phi) * radius * Math.sin(theta), Math.cos(theta) * height, Math.sin(phi) * radius * Math.sin(theta)];
+    return float32 ? Array.from(Float32Array.from(coordinates)) : coordinates;
+  };
+  const triangles: number[][][] = [];
+  for (let x = 0; x < lon; x += 1) triangles.push([[0, height, 0], point(1, x + 1), point(1, x)]);
+  for (let y = 1; y < lat; y += 1) {
+    for (let x = 0; x < lon; x += 1) {
+      const a = point(y, x);
+      const b = point(y, x + 1);
+      const c = point(y + 1, x + 1);
+      const d = point(y + 1, x);
+      triangles.push([a, c, d], [a, b, c]);
+    }
+  }
+  for (let x = 0; x < lon; x += 1) triangles.push([[0, 0, 0], point(lat, x), point(lat, x + 1)]);
+  const stl = [
+    "solid halfsphere",
+    ...triangles.map(([a, b, c]) => `facet normal 0 0 0\n outer loop\n  vertex ${a.join(" ")}\n  vertex ${b.join(" ")}\n  vertex ${c.join(" ")}\n endloop\nendfacet`),
+    "endsolid halfsphere",
+  ].join("\n");
+  const faces = cad.getSubShapes(cad.importStl(stl), "face");
+  let solid = cad.sewAndSolidify(faces, 1e-5);
+  solid = cad.fixShape(solid);
+  solid = cad.healSolid(solid, 1e-5);
+  solid = cad.fixFaceOrientations(solid);
+  return cad.unifySameDomain(solid);
+}
+
+describe("faceted half sphere in double precision", () => {
+  it("only offers the flat bottom as an opening", () => {
+    const halfSphere = facetedHalfSphere(16, 10, 11);
+    expect(availableShellOpenings(cad, [halfSphere])).toEqual(["bottom", "closed"]);
+  });
+
+  it("hollows into a bowl through the flat bottom", () => {
+    const halfSphere = facetedHalfSphere(16, 10, 11);
+    const shelled = shellCadSolid(cad, halfSphere, 2, "bottom");
+    expect(cad.isValid(shelled)).toBe(true);
+    expect(cad.getVolume(shelled)).toBeLessThan(cad.getVolume(halfSphere) * 0.7);
+    expectSameBounds(cad.getBoundingBox(shelled, false), cad.getBoundingBox(halfSphere, false));
+  });
+
+  it("closes the cavity even when the full inward offset fails", () => {
+    const halfSphere = facetedHalfSphere(16, 10, 11);
+    const open = shellCadSolid(cad, halfSphere, 2, "bottom");
+    const closed = shellCadSolid(cad, halfSphere, 2, "closed");
+    expect(cad.isValid(closed)).toBe(true);
+    expect(cad.getSubShapes(closed, "solid")).toHaveLength(1);
+    expectSameBounds(cad.getBoundingBox(closed, false), cad.getBoundingBox(halfSphere, false));
+    // The closed result adds a 2 mm floor under the open bowl's cavity.
+    expect(cad.getVolume(closed)).toBeGreaterThan(cad.getVolume(open));
+    expect(cad.getVolume(closed)).toBeLessThan(cad.getVolume(halfSphere));
+  });
+});
+
+describe("faceted half sphere as transferred by the editor", () => {
+  it("reports a failed shell instead of returning the unchanged body", () => {
+    // Float32 rounding leaves each quad's two triangles almost, but not exactly,
+    // coplanar; OpenCascade then returns the input body without an error.
+    const halfSphere = facetedHalfSphere(16, 10, 11, true);
+    expect(() => shellCadSolid(cad, halfSphere, 2, "bottom")).toThrow(/could not hollow this body/);
   });
 });
 

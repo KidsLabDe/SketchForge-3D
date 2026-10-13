@@ -136,6 +136,7 @@ export function EdgeModifierPanel({
   maxAmount,
   chamferAngle,
   shellOpening,
+  shellOpenings,
   quality,
   sharpAngle,
   workspace,
@@ -169,6 +170,7 @@ export function EdgeModifierPanel({
   maxAmount: number;
   chamferAngle: number;
   shellOpening: ShellOpening;
+  shellOpenings: ShellOpening[];
   quality: CadModifierQuality;
   sharpAngle: number;
   workspace: WorkplaneWorkspaceSettings;
@@ -282,8 +284,8 @@ export function EdgeModifierPanel({
         <label className="edge-modifier-field">
           <span>Opening</span>
           <select value={shellOpening} disabled={!prepared || busy} onChange={(event) => onShellOpeningChange(event.currentTarget.value as ShellOpening)}>
-            <option value="top">Open top</option>
-            <option value="bottom">Open bottom</option>
+            <option value="top" disabled={!shellOpenings.includes("top")}>Open top{shellOpenings.includes("top") ? "" : " (no flat top face)"}</option>
+            <option value="bottom" disabled={!shellOpenings.includes("bottom")}>Open bottom{shellOpenings.includes("bottom") ? "" : " (no flat bottom face)"}</option>
             <option value="closed">Closed (inner cavity)</option>
           </select>
         </label>

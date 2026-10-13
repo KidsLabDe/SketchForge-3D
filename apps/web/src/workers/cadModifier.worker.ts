@@ -2,7 +2,7 @@
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import { shellCadSolid } from "@/lib/cadShell";
+import { availableShellOpenings, shellCadSolid } from "@/lib/cadShell";
 import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
 
 const HASH_UPPER_BOUND = 2_147_483_647;
@@ -434,6 +434,7 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
         edges: collected.edges.map((edge) => ({ ...edge, owner: edgeOwners[edge.id] ?? 0 })),
         selectableEdgeIds: collected.selectableEdgeIds,
         sourceType: activeCad.getShapeType(baseShape),
+        ...(request.detectShellOpenings ? { shellOpenings: availableShellOpenings(activeCad, baseSolids) } : {}),
       });
       return;
     }

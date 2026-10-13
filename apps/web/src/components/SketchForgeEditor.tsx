@@ -155,6 +155,7 @@ type EdgeModifierSession = {
   sharpAngle: number;
   chamferAngle: number;
   shellOpening: ShellOpening;
+  shellOpenings: ShellOpening[];
   quality: CadModifierQuality;
   tangentChain: boolean;
   preserveEdgeSize: boolean;
@@ -5680,6 +5681,10 @@ export function SketchForgeEditor({
         const shell = edgeModifierRef.current?.kind === "shell";
         setEdgeModifier((current) => current ? {
           ...current,
+          ...(shell && message.shellOpenings?.length ? {
+            shellOpenings: message.shellOpenings,
+            shellOpening: message.shellOpenings.includes(current.shellOpening) ? current.shellOpening : message.shellOpenings[0],
+          } : {}),
           edges: message.edges,
           selectedEdgeIds: [],
           busy: false,
@@ -7481,6 +7486,7 @@ export function SketchForgeEditor({
       sharpAngle: 25,
       chamferAngle: 45,
       shellOpening: "top",
+      shellOpenings: ["top", "bottom", "closed"],
       quality: "standard",
       tangentChain: defaultCadModifierTangentChain(appliedEdgeTreatmentCount),
       // A wall should stay at its thickness when the hollowed body is resized.
@@ -7502,6 +7508,7 @@ export function SketchForgeEditor({
       parts,
       sharpAngle: 25,
       suppressTreatmentDetailEdges: appliedEdgeTreatmentCount > 0,
+      detectShellOpenings: kind === "shell",
     }, parts.flatMap((part) => part.positions && part.indices ? [part.positions.buffer, part.indices.buffer] : []));
     if (prepareRequestId === null) {
       const message = cadModifierWorkerFailureMessage();
@@ -7619,6 +7626,7 @@ export function SketchForgeEditor({
       sharpAngle,
       chamferAngle,
       shellOpening: "top",
+      shellOpenings: ["top", "bottom", "closed"],
       quality,
       tangentChain: false,
       preserveEdgeSize,
@@ -9321,6 +9329,7 @@ export function SketchForgeEditor({
           maxAmount={edgeModifierMaxAmount}
           chamferAngle={edgeModifier.chamferAngle}
           shellOpening={edgeModifier.shellOpening}
+          shellOpenings={edgeModifier.shellOpenings}
           quality={edgeModifier.quality}
           sharpAngle={edgeModifier.sharpAngle}
           workspace={workspaceSettings}
