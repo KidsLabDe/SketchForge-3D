@@ -72,7 +72,7 @@ import {
   withHoleMode,
   workplaneShapesEqual,
 } from "@/lib/workplaneShapes";
-import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForAnalyticHalfSphere, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
+import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierHalfSpherePrimitiveForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
 import { hasOneToOneCadComponentMapping } from "@/lib/cadModifierGroups";
 import { maxShellThickness } from "@/lib/cadShell";
 import { mergeEnclosedCavityComponents } from "@/lib/meshCavities";
@@ -7459,7 +7459,7 @@ export function SketchForgeEditor({
       // almost but not exactly coplanar), so it uses the exact surface instead.
       // Chamfer and fillet keep the faceted mesh that matches the viewport.
       const primitive = cadModifierPrimitiveForShape(shape)
-        ?? (kind === "shell" ? cadModifierPrimitiveForAnalyticHalfSphere(shape) : null);
+        ?? (kind === "shell" ? cadModifierHalfSpherePrimitiveForShape(shape) : null);
       if (primitive) return { shape, primitive };
       return shape.cadBrep && frame && !preserveNeedsRetessellation
         ? { shape, brep: shape.cadBrep, brepTransform: cadBrepTransformForShape(shape) }

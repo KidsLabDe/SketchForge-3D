@@ -195,7 +195,8 @@ export type CadBrepFrame = {
 };
 
 export type CadPrimitiveFrame = {
-  kind: "box";
+  /** "halfSphere" frames store the base diameter as width and depth. */
+  kind: "box" | "halfSphere";
   width: number;
   depth: number;
   height: number;

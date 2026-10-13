@@ -26,7 +26,7 @@ import { NameplateTutorialPanel } from "@/components/workplane/NameplateTutorial
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import type { AppThemePreference, ResolvedAppTheme } from "@/lib/appTheme";
 import type { ChallengeTutorialId } from "@/lib/challenges";
-import { cadModifierPrimitiveForBakedShape, cadTransformFromMatrix, cadTransformToMatrix } from "@/lib/cadBakeMetadata";
+import { cadModifierPrimitiveForBakedHalfSphere, cadModifierPrimitiveForBakedShape, cadTransformFromMatrix, cadTransformToMatrix } from "@/lib/cadBakeMetadata";
 import { createGearGeometry } from "@/lib/gearGeometry";
 import { parseMeasurementInput } from "@/lib/measurementUnits";
 import { createMoveDimensionOverlay, type MoveDimensionAxis, type MoveDimensionOverlayData } from "@/lib/moveDimensionLines";
@@ -2172,7 +2172,11 @@ function resizeImportedShapeAlongFrameNormal(
     if (index % 3 === 1) return value - min.y;
     return value - centerZ;
   });
-  const primitive = cadModifierPrimitiveForBakedShape(shape);
+  const box = cadModifierPrimitiveForBakedShape(shape);
+  const halfSphere = box ? null : cadModifierPrimitiveForBakedHalfSphere(shape);
+  const primitive = box ?? (halfSphere
+    ? { kind: halfSphere.kind, width: halfSphere.radius * 2, depth: halfSphere.radius * 2, height: halfSphere.height, transform: halfSphere.transform }
+    : null);
   const primitiveTransform = primitive
     ? deformation.clone().multiply(cadTransformToMatrix(primitive.transform))
     : null;

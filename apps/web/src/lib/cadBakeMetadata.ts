@@ -124,10 +124,11 @@ export function cadModifierPrimitiveForAnalyticHalfSphere(shape: WorkplaneShape)
   };
 }
 
-export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadModifierBoxPrimitive | null {
+/** Maps a baked primitive's local frame onto the shape's current world placement. */
+function bakedPrimitiveMatrix(shape: WorkplaneShape, kind: NonNullable<WorkplaneShape["cadPrimitiveFrame"]>["kind"]) {
   const primitive = shape.cadPrimitiveFrame;
   const frame = primitive?.frame;
-  if (!primitive || primitive.kind !== "box" || !frame) {
+  if (!primitive || primitive.kind !== kind || !frame) {
     return null;
   }
 
@@ -152,7 +153,7 @@ export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadMod
   const mirrorX = mirrorSign(shape.mirrorX);
   const mirrorY = mirrorSign(shape.mirrorY);
   const mirrorZ = mirrorSign(shape.mirrorZ);
-  const matrix = new THREE.Matrix4()
+  return new THREE.Matrix4()
     .makeTranslation(shape.x, (shape.elevation ?? 0) + centerY, shape.z)
     .multiply(new THREE.Matrix4().makeRotationFromEuler(
       new THREE.Euler(
@@ -166,15 +167,78 @@ export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadMod
     .multiply(new THREE.Matrix4().makeScale(mirrorX * scaleX, mirrorY * scaleY, mirrorZ * scaleZ))
     .multiply(new THREE.Matrix4().makeTranslation(-frame.x, -frame.elevation, -frame.z))
     .multiply(cadTransformToMatrix(frame.sourceTransform));
+}
+
+export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadModifierBoxPrimitive | null {
+  const primitive = shape.cadPrimitiveFrame;
+  const matrix = bakedPrimitiveMatrix(shape, "box");
+  if (!primitive || !matrix) {
+    return null;
+  }
 
   const transform = cadTransformFromMatrix(matrix);
   return {
-    kind: primitive.kind,
+    kind: "box",
     width: primitive.width,
     depth: primitive.depth,
     height: primitive.height,
     transform: isIdentityCadTransform(transform) ? undefined : transform,
   };
+}
+
+/**
+ * Splits a half sphere placement into exact dimensions and a rigid transform,
+ * which keeps the sphere surface analytic in OpenCascade. Works when the local
+ * axes stay perpendicular and the base stays circular (rotations, mirrors, and
+ * resizes along the dome's own axes); returns null otherwise.
+ */
+function rigidHalfSpherePrimitive(radius: number, height: number, matrix: THREE.Matrix4): CadModifierHalfSpherePrimitive | null {
+  const axisX = new THREE.Vector3();
+  const axisY = new THREE.Vector3();
+  const axisZ = new THREE.Vector3();
+  matrix.extractBasis(axisX, axisY, axisZ);
+  const lengthX = axisX.length();
+  const lengthY = axisY.length();
+  const lengthZ = axisZ.length();
+  if (!allFinitePositive([lengthX, lengthY, lengthZ])) return null;
+  const tolerance = 1e-6;
+  if (Math.abs(lengthX - lengthZ) > tolerance * Math.max(lengthX, lengthZ)) return null;
+  axisX.divideScalar(lengthX);
+  axisY.divideScalar(lengthY);
+  axisZ.divideScalar(lengthZ);
+  if (Math.abs(axisX.dot(axisY)) > tolerance || Math.abs(axisY.dot(axisZ)) > tolerance || Math.abs(axisX.dot(axisZ)) > tolerance) return null;
+  // Mirroring across the dome's own axis changes nothing, so drop it to keep
+  // the transform a proper rotation.
+  if (axisX.clone().cross(axisY).dot(axisZ) < 0) axisX.negate();
+  const origin = new THREE.Vector3().setFromMatrixPosition(matrix);
+  const rigid = new THREE.Matrix4().makeBasis(axisX, axisY, axisZ).setPosition(origin);
+  const transform = cadTransformFromMatrix(rigid);
+  return {
+    kind: "halfSphere",
+    radius: radius * lengthX,
+    height: height * lengthY,
+    transform: isIdentityCadTransform(transform) ? undefined : transform,
+  };
+}
+
+/** Half sphere whose rotation or mirror was baked into a mesh. */
+export function cadModifierPrimitiveForBakedHalfSphere(shape: WorkplaneShape): CadModifierHalfSpherePrimitive | null {
+  const primitive = shape.cadPrimitiveFrame;
+  const matrix = bakedPrimitiveMatrix(shape, "halfSphere");
+  if (!primitive || !matrix || Math.abs(primitive.width - primitive.depth) > 1e-6 * Math.max(primitive.width, primitive.depth)) {
+    return null;
+  }
+  return rigidHalfSpherePrimitive(primitive.width / 2, primitive.height, matrix);
+}
+
+/**
+ * Exact half sphere for Hollow, from the live primitive or from a mesh that
+ * still records it. Shapes whose geometry was replaced by a CAD feature keep
+ * the faceted path.
+ */
+export function cadModifierHalfSpherePrimitiveForShape(shape: WorkplaneShape): CadModifierHalfSpherePrimitive | null {
+  if (shape.cadBrep || shape.edgeTreatments?.length) return null;
+  return cadModifierPrimitiveForAnalyticHalfSphere(shape) ?? cadModifierPrimitiveForBakedHalfSphere(shape);
 }
 
 export function bakedBoxSelectionFrame(shape: WorkplaneShape) {
@@ -278,8 +342,14 @@ function bakeCadDisplayEdgesForShape(shape: WorkplaneShape, frame: BakedCadMetad
   return bakedEdges.length > 0 ? bakedEdges : undefined;
 }
 
-function bakeCadPrimitiveFrameForShapeTransform(shape: WorkplaneShape, frame: BakedCadMetadataFrame) {
-  const primitive = cadModifierPrimitiveForBakedShape(shape) ?? cadModifierPrimitiveForAnalyticBox(shape);
+function bakeCadPrimitiveFrameForShapeTransform(shape: WorkplaneShape, frame: BakedCadMetadataFrame): WorkplaneShape["cadPrimitiveFrame"] {
+  const box = cadModifierPrimitiveForBakedShape(shape) ?? cadModifierPrimitiveForAnalyticBox(shape);
+  const halfSphere = box ? null : cadModifierPrimitiveForBakedHalfSphere(shape) ?? cadModifierPrimitiveForAnalyticHalfSphere(shape);
+  const primitive = box
+    ? { kind: "box" as const, width: box.width, depth: box.depth, height: box.height, transform: box.transform }
+    : halfSphere
+      ? { kind: "halfSphere" as const, width: halfSphere.radius * 2, depth: halfSphere.radius * 2, height: halfSphere.height, transform: halfSphere.transform }
+      : null;
   if (!primitive) {
     return undefined;
   }
