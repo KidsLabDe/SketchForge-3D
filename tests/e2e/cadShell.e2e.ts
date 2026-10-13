@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { OcctKernel } from "occt-wasm";
+import { makeHalfSphereSolid, makeHollowHalfSphereSolid } from "@/lib/cadPrimitives";
 import { availableShellOpenings, maxShellThickness, shellCadSolid, shellOpenFaces } from "@/lib/cadShell";
 
 let cad: OcctKernel;
@@ -136,6 +137,89 @@ describe("faceted half sphere as transferred by the editor", () => {
     // coplanar; OpenCascade then returns the input body without an error.
     const halfSphere = facetedHalfSphere(16, 10, 11, true);
     expect(() => shellCadSolid(cad, halfSphere, 2, "bottom")).toThrow(/could not hollow this body/);
+  });
+});
+
+// Some OpenCascade operations corrupt the WebAssembly heap without throwing;
+// the next boolean then traps. A plain box cut proves the kernel is intact.
+function expectKernelIntact() {
+  const cut = cad.cut(cad.makeBox(10, 10, 10), cad.makeBox(5, 5, 5));
+  expect(cad.getVolume(cut)).toBeCloseTo(875, 6);
+}
+
+describe("exact half sphere", () => {
+  it.each([
+    [11, 11],
+    [15, 8],
+    [8, 15],
+    [10, 2.5],
+  ])("builds radius %s / height %s with a flat base", (radius, height) => {
+    const halfSphere = makeHalfSphereSolid(cad, radius, height);
+    expect(cad.isValid(halfSphere)).toBe(true);
+    expect(cad.getVolume(halfSphere)).toBeCloseTo((2 / 3) * Math.PI * radius * radius * height, 3);
+    const bounds = cad.getBoundingBox(halfSphere, false);
+    expect(bounds.ymin).toBeCloseTo(0, 6);
+    expect(bounds.ymax).toBeCloseTo(height, 6);
+    expect(bounds.xmax).toBeCloseTo(radius, 6);
+    expect(availableShellOpenings(cad, [halfSphere])).toEqual(["bottom", "closed"]);
+  });
+
+  it.each([
+    [11, 11],
+    [15, 8],
+    [8, 15],
+    [10, 2.5],
+  ])("hollows radius %s / height %s from its profile without harming the kernel", (radius, height) => {
+    const solid = makeHalfSphereSolid(cad, radius, height);
+    const bounds = cad.getBoundingBox(solid, false);
+    const bowl = makeHollowHalfSphereSolid(cad, radius, height, 1, "bottom");
+    expectKernelIntact();
+    const closed = makeHollowHalfSphereSolid(cad, radius, height, 1, "closed");
+    expectKernelIntact();
+    [bowl, closed].forEach((result) => {
+      expect(cad.isValid(result)).toBe(true);
+      expect(cad.getSubShapes(result, "solid")).toHaveLength(1);
+      expectSameBounds(cad.getBoundingBox(result, false), bounds);
+    });
+    expect(cad.getVolume(bowl)).toBeLessThan(cad.getVolume(closed));
+    expect(cad.getVolume(closed)).toBeLessThan(cad.getVolume(solid));
+  });
+
+  it("leaves a wall of exactly the requested thickness on a true half sphere", () => {
+    expect(cad.getVolume(makeHollowHalfSphereSolid(cad, 11, 11, 1, "bottom"))).toBeCloseTo((2 / 3) * Math.PI * (11 ** 3 - 10 ** 3), 3);
+    // Closed adds a 1 mm floor under the 10 mm cavity: a disc of radius 10 minus
+    // the 1 mm slice of the inner hemisphere it replaces.
+    const cavity = (2 / 3) * Math.PI * 1000 - Math.PI * (100 * 1 - 1 / 3);
+    expect(cad.getVolume(makeHollowHalfSphereSolid(cad, 11, 11, 1, "closed"))).toBeCloseTo((2 / 3) * Math.PI * 1331 - cavity, 3);
+  });
+
+  it("rejects a wall that leaves no cavity", () => {
+    expect(() => makeHollowHalfSphereSolid(cad, 20, 1.5, 1, "closed")).toThrow(/leaves no cavity/);
+    expectKernelIntact();
+  });
+});
+
+describe("box with filleted edges", () => {
+  function filletedBox(verticalOnly: boolean) {
+    const box = cad.makeBox(20, 10, 30);
+    const edges = cad.getSubShapes(box, "edge").filter((edge) => {
+      if (!verticalOnly) return true;
+      const edgeBounds = cad.getBoundingBox(edge, false);
+      return edgeBounds.ymax - edgeBounds.ymin > 5;
+    });
+    return cad.fillet(box, edges, 2);
+  }
+
+  it.each([[true], [false]])("hollows open and closed (vertical edges only: %s)", (verticalOnly) => {
+    const box = filletedBox(verticalOnly);
+    const bounds = cad.getBoundingBox(box, false);
+    for (const opening of ["top", "closed"] as const) {
+      const shelled = shellCadSolid(cad, box, 1.5, opening);
+      expect(cad.isValid(shelled)).toBe(true);
+      expect(cad.getVolume(shelled)).toBeLessThan(cad.getVolume(box) * 0.6);
+      expectSameBounds(cad.getBoundingBox(shelled, false), bounds);
+      expectKernelIntact();
+    }
   });
 });
 

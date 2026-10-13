@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Added **Hollow** next to Chamfer and Fillet: hollows a solid or group with a constant inward wall thickness, either open at the top, open at the bottom, or closed around an inner cavity. The outer size stays the same, and the feature is reversible through the edge feature history. `.skf` files that contain a hollow use the new `shell` feature type and cannot be opened by older SketchForge versions.
+- Hollow builds circular half spheres from their exact surface, so they hollow in well under a second, open at the base or closed. The hollowed half sphere is smooth regardless of its segment setting; half spheres with an oval footprint still use the faceted mesh, which usually cannot be hollowed.
+- Hollow detects which openings a body supports and reports a failed hollow instead of showing an unchanged preview.
 - Separate Parts no longer splits the inner skin of a fully enclosed cavity off as its own part.
 - Arrow-key holds (including Ctrl/Cmd+arrow elevation changes) now finish as one undo step and one save on release. Separate taps remain separate undo steps.
 - Reduced autosave work after transforms by sharing CAD display edges across undo states and reusing immutable mesh, B-Rep, and image encoding.

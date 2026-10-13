@@ -1,7 +1,8 @@
 /// <reference lib="webworker" />
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
-import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierHalfSpherePrimitive, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import { makeHalfSphereSolid, makeHollowHalfSphereSolid } from "@/lib/cadPrimitives";
 import { availableShellOpenings, shellCadSolid } from "@/lib/cadShell";
 import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
 
@@ -14,6 +15,9 @@ let baseShape: ShapeHandle | null = null;
 let baseSolids: ShapeHandle[] = [];
 let edgeHandles: ShapeHandle[] = [];
 let edgeOwners: number[] = [];
+// Set when the prepared body is a single exact half sphere; Hollow then builds
+// the result from its 2D profile instead of offsetting the curved surface.
+let baseHalfSphere: CadModifierHalfSpherePrimitive | null = null;
 
 type CollectedCadEdgeGeometry = Omit<CadModifierEdge, "display" | "selectable"> & {
   curveType: string;
@@ -47,6 +51,7 @@ function releaseSession(cad: OcctKernel) {
   baseSolids = [];
   edgeHandles = [];
   edgeOwners = [];
+  baseHalfSphere = null;
 }
 
 function cadShapeIsValid(cad: OcctKernel, shape: ShapeHandle) {
@@ -164,8 +169,12 @@ function applyCadTransform(cad: OcctKernel, shape: ShapeHandle, transform: numbe
 }
 
 function reconstructPrimitiveSolid(cad: OcctKernel, primitive: CadModifierPrimitivePart) {
-  if (primitive.kind !== "box") {
-    throw new Error(`Unsupported CAD primitive: ${primitive.kind}`);
+  if (primitive.kind === "halfSphere") {
+    const transformed = applyCadTransform(cad, makeHalfSphereSolid(cad, primitive.radius, primitive.height), primitive.transform);
+    if (!cad.isSolid(transformed) || !cadShapeIsValid(cad, transformed)) {
+      throw new Error("The half sphere could not be prepared as a valid CAD solid");
+    }
+    return transformed;
   }
   const width = primitive.width;
   const depth = primitive.depth;
@@ -403,6 +412,8 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     if (request.type === "prepare") {
       releaseSession(activeCad);
       baseShape = reconstructParts(activeCad, request.parts);
+      const onlyPart = request.parts.length === 1 ? request.parts[0] : null;
+      baseHalfSphere = onlyPart && !onlyPart.hole && onlyPart.primitive?.kind === "halfSphere" ? onlyPart.primitive : null;
       const collected = collectEdges(activeCad, baseShape, request.sharpAngle, Boolean(request.suppressTreatmentDetailEdges), true);
       edgeHandles = collected.handles;
       baseSolids = activeCad.isSolid(baseShape) ? [baseShape] : activeCad.getSubShapes(baseShape, "solid");
@@ -448,7 +459,15 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
       for (let owner = 0; owner < baseSolids.length; owner += 1) {
         const solid = baseSolids[owner];
         const componentEdges = selected.filter((entry) => entry.owner === owner).map((entry) => entry.edge);
-        const component = isShell
+        const component = isShell && baseHalfSphere && baseSolids.length === 1
+          // The only flat face of a half sphere is its base, so any offered
+          // opening other than "closed" opens the base, however it is oriented.
+          ? applyCadTransform(
+              activeCad,
+              makeHollowHalfSphereSolid(activeCad, baseHalfSphere.radius, baseHalfSphere.height, request.amount, request.shellOpening === "closed" ? "closed" : "bottom"),
+              baseHalfSphere.transform,
+            )
+          : isShell
           ? shellCadSolid(activeCad, solid, request.amount, request.shellOpening ?? "top")
           : componentEdges.length === 0
           ? activeCad.copy(solid)

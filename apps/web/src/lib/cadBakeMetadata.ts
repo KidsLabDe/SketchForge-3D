@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { WorkplaneShape } from "@/types/sketchforge";
-import type { CadModifierPrimitivePart } from "@/lib/cadModifierTypes";
+import type { CadModifierBoxPrimitive, CadModifierHalfSpherePrimitive } from "@/lib/cadModifierTypes";
 import { mirrorSign, resizedImportedCoordinates, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 
 export type BakedCadMetadataFrame = {
@@ -44,7 +44,7 @@ function allFinitePositive(values: number[]) {
   return values.every((value) => Number.isFinite(value) && value > 0);
 }
 
-export function cadModifierPrimitiveForAnalyticBox(shape: WorkplaneShape): CadModifierPrimitivePart | null {
+export function cadModifierPrimitiveForAnalyticBox(shape: WorkplaneShape): CadModifierBoxPrimitive | null {
   if (shape.kind !== "box" || shape.importedMesh || shape.groupedShapes?.length) {
     return null;
   }
@@ -80,7 +80,51 @@ export function cadModifierPrimitiveForAnalyticBox(shape: WorkplaneShape): CadMo
   };
 }
 
-export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadModifierPrimitivePart | null {
+/**
+ * Exact half sphere for shapes whose footprint is circular. Elliptical
+ * footprints (width != depth) have no exact OpenCascade primitive here and
+ * keep using the tessellated mesh.
+ */
+export function cadModifierPrimitiveForAnalyticHalfSphere(shape: WorkplaneShape): CadModifierHalfSpherePrimitive | null {
+  if (shape.kind !== "halfSphere" || shape.importedMesh || shape.groupedShapes?.length) {
+    return null;
+  }
+
+  const width = shapeWidth(shape);
+  const depth = shapeDepth(shape);
+  const height = shape.height;
+  if (!allFinitePositive([width, depth, height]) || Math.abs(width - depth) > 1e-6 * Math.max(width, depth)) {
+    return null;
+  }
+
+  const centerY = height / 2;
+  const matrix = new THREE.Matrix4()
+    .makeTranslation(shape.x, (shape.elevation ?? 0) + centerY, shape.z)
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(
+      new THREE.Euler(
+        THREE.MathUtils.degToRad(shape.rotationX ?? 0),
+        THREE.MathUtils.degToRad(shape.rotation ?? 0),
+        THREE.MathUtils.degToRad(shape.rotationZ ?? 0),
+        "XYZ",
+      ),
+    ))
+    // The body is symmetric about its Y axis, so mirroring X or Z changes
+    // nothing and mirroring Y equals a half turn about X. Keeping the
+    // transform rigid preserves the exact sphere surface in OpenCascade, which
+    // a general (mirroring) transform would convert to a B-spline.
+    .multiply(new THREE.Matrix4().makeRotationX(shape.mirrorY ? Math.PI : 0))
+    .multiply(new THREE.Matrix4().makeTranslation(0, -centerY, 0));
+
+  const transform = cadTransformFromMatrix(matrix);
+  return {
+    kind: "halfSphere",
+    radius: width / 2,
+    height,
+    transform: isIdentityCadTransform(transform) ? undefined : transform,
+  };
+}
+
+export function cadModifierPrimitiveForBakedShape(shape: WorkplaneShape): CadModifierBoxPrimitive | null {
   const primitive = shape.cadPrimitiveFrame;
   const frame = primitive?.frame;
   if (!primitive || primitive.kind !== "box" || !frame) {

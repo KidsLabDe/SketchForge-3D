@@ -19,13 +19,23 @@ export type CadModifierDisplayEdge = {
   points: number[];
 };
 
-export type CadModifierPrimitivePart = {
+export type CadModifierBoxPrimitive = {
   kind: "box";
   width: number;
   depth: number;
   height: number;
   transform?: number[];
 };
+
+/** Exact half sphere used only by Hollow; its base sits at y = 0. */
+export type CadModifierHalfSpherePrimitive = {
+  kind: "halfSphere";
+  radius: number;
+  height: number;
+  transform?: number[];
+};
+
+export type CadModifierPrimitivePart = CadModifierBoxPrimitive | CadModifierHalfSpherePrimitive;
 
 export type CadModifierMeshPart = {
   positions?: Float32Array;
